@@ -1,98 +1,117 @@
 const express = require("express");
-const jwt = require("jsonwebtoken");
-const bcrypt = require("bcrypt");
-
 const app = express();
 const port = process.env.PORT || 3000;
+const jwt = require("jsonwebtoken");
 app.use(express.json()); // for parsing application/json
 
-app.get("/", (req, res) => {
-  res.send("Welcome to the Game High Scores API!");
-});
-
-
-const SECRET_KEY = "your_secret_key"; // should use environment variables
-
-const users = []; // storage user (database should be used for practical applications)
-const highScores = []; // Store high scores
-
 // ------ WRITE YOUR SOLUTION HERE BELOW ------//
+//singup
+app.post("/signup", (req, res) => {
+  const userHandle = req.body.userHandle;
+  const password = req.body.password;
 
-// store high scores
-app.post("/register", async (req, res) => {
-  const { username, password } = req.body;
-  if (!username || !password) {
-    return res.status(400).json({ error: "Username and password required" });
+
+  if (!userHandle || !password || userHandle.length < 6 || password.length < 6 || typeof userHandle !== "string" || typeof password !== "string") {
+    res.status(400).send("Invalid request body");
+    return;
   }
-
-  const existingUser = users.find((user) => user.username === username);
-  if (existingUser) {
-    return res.status(400).json({ error: "User already exists" });
-  }
-
-  const hashedPassword = await bcrypt.hash(password, 10);
-  users.push({ username, password: hashedPassword });
-
-  res.status(201).json({ message: "User registered successfully" });
+  users.push({ userHandle, password });
+  res.status(201).send("User registered successfully");
 });
 
-// users login
-app.post("/login", async (req, res) => {
-  const { username, password } = req.body;
-  const user = users.find((user) => user.username === username);
+//login
+const JWT_SECRET = "cyuhvj";
+const users = [];
+app.post("/login", (req, res) => {
+  const { userHandle, password } = req.body;
 
-  if (!user || !(await bcrypt.compare(password, user.password))) {
-    return res.status(401).json({ error: "Invalid credentials" });
+   // Check for additional fields
+   const allowedFields = ["userHandle", "password"];
+   const extraFields = Object.keys(req.body).filter((key) => !allowedFields.includes(key));
+ 
+   if (extraFields.length > 0) {
+     res.status(400).send("Invalid fields provided");
+     return;
+   }
+
+  if (!userHandle || !password || typeof userHandle !== "string" || typeof password !== "string") {
+    res.status(400).send("Bad Request");
+    return;
   }
 
-  const token = jwt.sign({ username }, SECRET_KEY, { expiresIn: "1h" });
-  res.json({ token });
+  const user = users.find((u) => u.userHandle === userHandle && u.password === password);
+
+  if (!user) {
+    res.status(401).send("Invalid username or password");
+    return;
+  }
+
+  const token = jwt.sign({ userHandle: user.userHandle }, JWT_SECRET);
+
+  res.status(200).send({
+    jsonWebToken: token
+  });
 });
 
-// JWT authentication middleware
+
+// Middleware: Authenticate Token
 const authenticateToken = (req, res, next) => {
-  const authHeader = req.headers["authorization"];
-  if (!authHeader) return res.status(401).json({ error: "No token provided" });
-
-  const token = authHeader.split(" ")[1];
-  jwt.verify(token, SECRET_KEY, (err, user) => {
-    if (err) return res.status(403).json({ error: "Invalid token" });
+  const authHeader = req.headers.authorization;
+  const token = authHeader && authHeader.split(" ")[1];
+  
+  if (!token) {
+    return res.status(401).send("Unauthorized, JWT token is missing or invalid");
+  }
+  jwt.verify(token, JWT_SECRET, (err, user) => {
+    if (err) {
+      return res.status(401).send("Unauthorized, JWT token is missing or invalid");
+    }
     req.user = user;
     next();
   });
 };
 
-// submit high scores
-app.post("/highscores", authenticateToken, (req, res) => {
-  const { level, score } = req.body;
-  if (!level || typeof score !== "number" || score < 0) {
-    return res.status(400).json({ error: "Invalid high score data" });
+
+
+//Submit High Score
+app.post("/high-scores", authenticateToken, (req, res) => {
+
+  const { level, userHandle, score, timestamp } = req.body;
+  if (!level || !userHandle || !score || !timestamp) {
+    return res.status(400).send("Invalid request body");
   }
 
-  highScores.push({ username: req.user.username, level, score });
-  res.status(201).json({ message: "High score submitted" });
+  scores.push({ level, userHandle, score, timestamp });
+  res.status(201).send("High score submitted successfully");
 });
 
-// get high scores (pagination supported)
-app.get("/highscores", (req, res) => {
-  const page = parseInt(req.query.page) || 1; // default page 1
-  const limit = parseInt(req.query.limit) || 20; // the default is 20 items per page
-  const startIndex = (page - 1) * limit;
-  const endIndex = startIndex + limit;
 
-  // sort by score from highest to lowest
-  const sortedScores = highScores.sort((a, b) => b.score - a.score);
+// Get High Scores (Protected Route)
+const scores = [];
+app.get("/high-scores", (req, res) => {
+  const { level, page = 1 } = req.query;  // page defaults to 1 if not provided
+  const limit = 20;  
+   // Filter scores by level if provided
+   let filteredScores = level ? scores.filter((s) => s.level === level) : scores;
 
-  const paginatedScores = sortedScores.slice(startIndex, endIndex);
-
-  res.json({
-    page,
-    limit,
-    totalScores: sortedScores.length,
-    totalPages: Math.ceil(sortedScores.length / limit),
-    highScores: paginatedScores,
-  });
-});
+   // Sort scores in descending order
+   filteredScores.sort((a, b) => b.score - a.score);
+ 
+   // Pagination logic
+   const startIndex = (page - 1) * limit;
+   const endIndex = page * limit;
+   const paginatedScores = filteredScores.slice(startIndex, endIndex);
+ 
+   // Return only an array of scores (Fixes test expectation)
+   res.status(200).send(
+     paginatedScores.map((score) => ({
+       level: level || "All levels",
+       userHandle: score.userHandle,
+       score: score.score,
+       timestamp: score.timestamp,
+     }))
+   );
+ });
 
 //------ WRITE YOUR SOLUTION ABOVE THIS LINE ------//
 
